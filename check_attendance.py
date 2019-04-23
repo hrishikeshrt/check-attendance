@@ -34,20 +34,39 @@ def configure(fresh=False):
     Get or Set Configuration
 
     Requirements:
-        Must have at least one GPG key already setup.
-        `gpg --genkey` (`man gpg`)
+        gnupg
     '''
+    # ----------------------------------------------------------------------- #
+
     home_dir = os.path.expanduser('~')
-    gpg_home = os.path.join(home_dir, '.gnupg/')
+    gpg_home = os.path.join(home_dir, '.gnupg')
+    gpg = gnupg.GPG(gnupghome=gpg_home, use_agent=True)
+
+    keys = gpg.list_keys()
+    if len(keys) == 0:
+        print("No GPG keys found. generating ...")
+        user_email = input("Email for GPG Key: ")
+        passphrase = getpass.getpass("Passphrase for GPG Key: ")
+        key_input = gpg.gen_key_input(user_email, passphrase)
+        print("We need to generate a lot of random bytes. It is a good idea "
+              "to perform some other action (type on the keyboard, move the "
+              "mouse, utilize the disks) during the prime generation; this "
+              "gives the random number generator a better chance to gain "
+              "enough entropy.")
+        gpg.gen_key(key_input)
+        keys = gpg.list_keys()
+
+    key = keys[0]['keyid']
+
+    # ----------------------------------------------------------------------- #
 
     attendance_dir = os.path.join(home_dir, '.attendance')
     config_file = os.path.join(attendance_dir, 'config')
 
+    # ----------------------------------------------------------------------- #
+
     if not os.path.isdir(attendance_dir):
         os.mkdir(attendance_dir)
-
-    gpg = gnupg.GPG(gnupghome=gpg_home, use_agent=True)
-    key = gpg.list_keys()[0]['keyid']
 
     if os.path.isfile(config_file) and not fresh:
         with open(config_file, 'r') as f:
