@@ -204,7 +204,7 @@ def get_pingala_attendance(username, password, date):
 
     s.post(login_url, data=login_data)
     check_response = s.get(logincheck_url)
-    if 'hrishirt' in check_response.text:
+    if username in check_response.text:
         logging.info("Pingala login successful.")
 
         soup = BeautifulSoup(check_response.text, 'html.parser')
