@@ -11,6 +11,12 @@ and adding the  following line at the end. (for checking at 5pm, 8pm, 11pm)
 
     0 17,20,23 * * * python3 <path_to_the_script>
 
+Requirements:
+    beautifulsoup4
+    python-gnupg
+
+    `pip install python-gnupg`
+    `pip install beautifulsoup4`
 """
 
 import os
@@ -18,6 +24,7 @@ import json
 import gnupg
 import getpass
 import smtplib
+import logging
 import requests
 import datetime
 import argparse
@@ -32,9 +39,6 @@ from email.message import EmailMessage
 def configure(fresh=False):
     '''
     Get or Set Configuration
-
-    Requirements:
-        gnupg
     '''
     # ----------------------------------------------------------------------- #
 
@@ -62,6 +66,11 @@ def configure(fresh=False):
 
     attendance_dir = os.path.join(home_dir, '.attendance')
     config_file = os.path.join(attendance_dir, 'config')
+    log_file = os.path.join(attendance_dir, 'log')
+
+    logging.basicConfig(filename=log_file,
+                        format='[%(asctime)s] %(levelname)s: %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO)
 
     # ----------------------------------------------------------------------- #
 
@@ -69,9 +78,12 @@ def configure(fresh=False):
         os.mkdir(attendance_dir)
 
     if os.path.isfile(config_file) and not fresh:
+        logging.info("Reading from config file")
         with open(config_file, 'r') as f:
             config = json.loads(str(gpg.decrypt(f.read())))
     else:
+        logging.info("Fresh config")
+
         config = {'smtp': {}, 'kendra': {}, 'pingala': {}}
 
         config['pingala']['username'] = ''
@@ -126,7 +138,7 @@ def get_kendra_attendance(username, password, date):
 
     login_url = server + 'AuthenticateUser.php'
     logout_url = server + 'Logout.php'
-    # profile_url = server + 'MyProfile.php'
+    profile_url = server + 'MyProfile.php'
     attendance_url = server + 'StudentAttendanceReport1.php?'
     attendance_options = 'Select=&val=i&FMonth={}&FYear={}'
 
@@ -140,6 +152,12 @@ def get_kendra_attendance(username, password, date):
 
     s = requests.session()
     s.post(login_url, data=data)
+    check_response = s.get(profile_url)
+    if username in check_response.text:
+        logging.info("Kendra login successful.")
+    else:
+        logging.warning("Kendra login failed.")
+        return None
 
     response = s.get(attendance_url + attendance_options)
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -165,25 +183,36 @@ def get_pingala_attendance(username, password, date):
 
     form_url = server + 'login'
     login_url = server + 'j_spring_security_check'
-    # logout_url = server + 'j_spring_security_logout'
+    logout_url = server + 'j_spring_security_logout'
     logincheck_url = server + 'logincheck'
     attendance_url = server + 'listMyAttendanceDetails?from_date={}&to_date={}'
 
-    data = {
+    login_data = {
         'javascriptAbility': 'Disable',
         'username': username,
         'password': password,
         '_csrf': None
     }
 
+    logout_data = {}
+
     s = requests.Session()
     r = s.get(form_url)
     soup = BeautifulSoup(r.text, 'html.parser')
     csrf = soup.find('input', {"name": "_csrf"})['value']
-    data['_csrf'] = csrf
+    login_data['_csrf'] = csrf
 
-    s.post(login_url, data=data)
-    s.get(logincheck_url)
+    s.post(login_url, data=login_data)
+    check_response = s.get(logincheck_url)
+    if 'hrishirt' in check_response.text:
+        logging.info("Pingala login successful.")
+
+        soup = BeautifulSoup(check_response.text, 'html.parser')
+        csrf = soup.find('input', {"name": "_csrf"})['value']
+        logout_data['_csrf'] = csrf
+    else:
+        logging.warning("Pingala login failed.")
+        return None
 
     response = s.get(attendance_url.format(date, date))
     response_dict = json.loads(response.text)
@@ -194,6 +223,7 @@ def get_pingala_attendance(username, password, date):
     if week_off:
         attendance_time = attendance_details['status']
 
+    s.post(logout_url, data=logout_data)
     s.close()
 
     return attendance_time
@@ -229,9 +259,9 @@ def notify(smtp_user, smtp_pass, source, date):
         mailer.login(smtp_user, smtp_pass)
         mailer.send_message(msg)
         mailer.quit()
-        print("Reminder e-mail sent.")
+        logging.info("Reminder e-mail sent.")
     else:
-        print("Error: no credentials. e-mail was not sent.")
+        logging.warnign("Error: no credentials. e-mail was not sent.")
 
 ###############################################################################
 
@@ -239,23 +269,28 @@ def notify(smtp_user, smtp_pass, source, date):
 def main():
     today = datetime.datetime.now().strftime("%d-%m-%Y")
 
-    config = configure()
-
-    smtp_user = config['smtp']['username']
-    smtp_pass = config['smtp']['password']
-
     ###########################################################################
 
     desc = "Get Pingala Attendance Time"
 
     p = argparse.ArgumentParser(description=desc)
     p.add_argument("-d", help="date dd-mm-yyyy", default=today)
+    p.add_argument("-f", help="force re-configure", action='store_true')
     args = vars(p.parse_args())
     date = args['d']
+    fresh = args['f']
+
+    ###########################################################################
+
+    config = configure(fresh=fresh)
+
+    smtp_user = config['smtp']['username']
+    smtp_pass = config['smtp']['password']
 
     ###########################################################################
 
     for name, details in config.items():
+        title = name.title()
         if details['check']:
             username = details['username']
             password = details['password']
@@ -264,11 +299,15 @@ def main():
             attendance_time = fetch_attendance(username, password, date)
             if attendance_time is None:
                 attendance_time = "not marked!"
-
+                logging.info("Attendance not marked on {} for {}".format(title,
+                                                                         date))
                 if date == today:
-                    notify(smtp_user, smtp_pass, name, today)
+                    notify(smtp_user, smtp_pass, title, today)
 
-            print("{}: [{}]: {}".format(name, date, attendance_time))
+            attendance_msg = "{}: [{}] {}".format(title, date, attendance_time)
+
+            logging.info(attendance_msg)
+            print(attendance_msg)
 
     ###########################################################################
 
