@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+Created on Tue Apr 23 01:36:48 2019
+
 @author: Hrishikesh Terdalkar
 
 Attendance Checker and Reminder for IITK CSE
 Checks both on Kendra and Pingala
+
+You can add the command to cronjob by running the command `crontab -e'
+and adding the  following line at the end. (for checking at 5pm, 8pm, 11pm)
+
+    0 17,20,23 * * * python3 <path_to_the_script>
+
 """
 
 import os
@@ -27,7 +35,7 @@ from email.message import EmailMessage
 def configure():
     '''
     Configuration
-    
+
     Requirements:
     GnuPG encrypted passwords to be stored in
       ~/.attendance/smtp.gpg
@@ -173,17 +181,18 @@ def notify(smtp_user, smtp_pass, source, date):
     # ----------------------------------------------------------------------- #
 
     content = ''
+    subject = 'Mark attendance on {} for {}'.format(source.title(), date)
 
     # compose mail
     msg = EmailMessage()
     msg.set_content(content)
-    msg['Subject'] = f'Mark attendance on {source.title()} for {date}'
-    msg['From'] = f'Attendance Reminder <{smtp_user}@cse.iitk.ac.in>'
-    msg['To'] = f'{smtp_user}@cse.iitk.ac.in'
+    msg['Subject'] = subject
+    msg['From'] = 'Attendance Reminder <{}@cse.iitk.ac.in>'.format(smtp_user)
+    msg['To'] = '{}@cse.iitk.ac.in'.format(smtp_user)
 
     # send mail
     if smtp_pass:
-        mailer = smtplib.SMTP(f'{smtp_addr}:{smtp_port}')
+        mailer = smtplib.SMTP('{}:{}'.format(smtp_addr, smtp_port))
         mailer.starttls()
         mailer.login(smtp_user, smtp_pass)
         mailer.send_message(msg)
@@ -227,7 +236,7 @@ def main():
                 if date == today:
                     notify(smtp_user, smtp_pass, name, today)
 
-            print(f"{name}: [{date}]: {attendance_time}")
+            print("{}: [{}]: {}".format(name, date, attendance_time))
 
     ###########################################################################
 
