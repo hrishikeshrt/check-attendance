@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Tue Apr 23 01:36:48 2019
-
 @author: Hrishikesh Terdalkar
 
 Attendance Checker and Reminder for IITK CSE
@@ -29,56 +27,71 @@ from email.message import EmailMessage
 
 ###############################################################################
 ###############################################################################
-# Edit in configure()
 
 
-def configure():
+def configure(fresh=False):
     '''
-    Configuration
+    Get or Set Configuration
 
     Requirements:
-    GnuPG encrypted passwords to be stored in
-      ~/.attendance/smtp.gpg
-      ~/.attendance/kendra.gpg
-      ~/.attendance/pingala.gpg
+        Must have at least one GPG key already setup.
+        `gpg --genkey` (`man gpg`)
     '''
     home_dir = os.path.expanduser('~')
     gpg_home = os.path.join(home_dir, '.gnupg/')
 
     attendance_dir = os.path.join(home_dir, '.attendance')
+    config_file = os.path.join(attendance_dir, 'config')
 
-    config = {'smtp': {}, 'kendra': {}, 'pingala': {}}
+    if not os.path.isdir(attendance_dir):
+        os.mkdir(attendance_dir)
 
-    config['pingala']['username'] = ''
-    config['pingala']['password'] = ''
-    config['pingala']['gpg'] = os.path.join(attendance_dir, 'pingala.gpg')
+    gpg = gnupg.GPG(gnupghome=gpg_home, use_agent=True)
+    key = gpg.list_keys()[0]['keyid']
+
+    if os.path.isfile(config_file) and not fresh:
+        with open(config_file, 'r') as f:
+            config = json.loads(str(gpg.decrypt(f.read())))
+    else:
+        config = {'smtp': {}, 'kendra': {}, 'pingala': {}}
+
+        config['pingala']['username'] = ''
+        config['pingala']['password'] = ''
+        config['pingala']['check'] = True
+
+        config['kendra']['username'] = ''
+        config['kendra']['password'] = ''
+        config['kendra']['check'] = True
+
+        config['smtp']['username'] = ''
+        config['smtp']['password'] = ''
+        config['smtp']['check'] = False
+
+        for name, details in config.items():
+            # --------------------------------------------------------------- #
+
+            username = getpass.getuser()
+
+            prompt = "'{}' username (default: {}): "
+            answer = input(prompt.format(name, username))
+            if answer == '':
+                answer = username
+            details['username'] = answer
+
+            # --------------------------------------------------------------- #
+
+            prompt = "'{}' password: "
+            answer = getpass.getpass(prompt.format(name))
+
+            details['password'] = answer
+
+            # --------------------------------------------------------------- #
+
+        with open(config_file, 'w') as f:
+            f.write(str(gpg.encrypt(json.dumps(config), key)))
+
     config['pingala']['function'] = get_pingala_attendance
-    config['pingala']['check'] = True
-
-    config['kendra']['username'] = ''
-    config['kendra']['password'] = ''
-    config['kendra']['gpg'] = os.path.join(attendance_dir, 'kendra.gpg')
     config['kendra']['function'] = get_kendra_attendance
-    config['kendra']['check'] = True
-
-    config['smtp']['username'] = ''
-    config['smtp']['password'] = ''
-    config['smtp']['gpg'] = os.path.join(attendance_dir, 'smtp.gpg')
-    config['smtp']['check'] = False
-
-    for name, details in config.items():
-        # ------------------------------------------------------------------- #
-        if details['username'] == '':
-            details['username'] = getpass.getuser()
-
-        # ------------------------------------------------------------------- #
-        # get password if not set
-        if details['password'] == '' and os.path.isfile(details['gpg']):
-            gpg = gnupg.GPG(gnupghome=gpg_home, use_agent=True)
-            with open(details['gpg'], 'rb') as f:
-                details['password'] = str(gpg.decrypt(f.read())).strip()
-
-        # ------------------------------------------------------------------- #
 
     return config
 
