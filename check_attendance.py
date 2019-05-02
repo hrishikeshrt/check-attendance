@@ -89,11 +89,11 @@ def configure(fresh=False):
         os.mkdir(attendance_dir)
 
     if os.path.isfile(config_file) and not fresh:
-        logging.info("Reading from config file")
+        logging.info("Reading from config file ...")
         with open(config_file, 'r') as f:
             config = json.loads(str(gpg.decrypt(f.read())))
     else:
-        logging.info("Fresh config")
+        logging.info("Initiating fresh config ...")
 
         config = {'smtp': {}, 'kendra': {}, 'pingala': {}}
 
@@ -109,21 +109,24 @@ def configure(fresh=False):
         config['smtp']['password'] = ''
         config['smtp']['check'] = False
 
+        username = getpass.getuser()
+
         for name, details in config.items():
             # --------------------------------------------------------------- #
 
-            username = getpass.getuser()
-
-            prompt = "'{}' username (default: {}): "
-            answer = input(prompt.format(name, username))
+            prompt = f"'{name}' username (default: {username}): "
+            answer = input(prompt)
             if answer == '':
                 answer = username
+            else:
+                username = answer
+
             details['username'] = answer
 
             # --------------------------------------------------------------- #
 
-            prompt = "'{}' password: "
-            answer = getpass.getpass(prompt.format(name))
+            prompt = f"'{name}' password: "
+            answer = getpass.getpass(prompt)
 
             details['password'] = answer
 
@@ -303,6 +306,7 @@ def main():
 
     for name, details in config.items():
         title = name.title()
+
         if details['check']:
             username = details['username']
             password = details['password']
@@ -322,7 +326,7 @@ def main():
                 logging.info(f"Attendance not marked on {title} for {date}")
                 if date == today:
                     subject = f'Mark attendance on {title} for {today}'
-                    sendmail(smtp_user, smtp_pass, subject=subject)
+                    sendmail(smtp_user, smtp_pass, subject)
 
             attendance_msg = f"{title}: [{date}] {attendance_status}"
 
