@@ -12,25 +12,32 @@ and adding the  following line at the end. (for checking at 5pm, 8pm, 11pm)
     0 17,20,23 * * * python3 <path_to_the_script>
 
 Requirements:
-    beautifulsoup4
-    python-gnupg
+    python 3.6+
 
+    requests
+    python-gnupg
+    beautifulsoup4
+
+    `pip install requests`
     `pip install python-gnupg`
     `pip install beautifulsoup4`
 """
 
 import os
 import json
-import gnupg
 import getpass
 import smtplib
 import logging
-import requests
 import datetime
 import argparse
+import traceback
+
+from email.message import EmailMessage
+
+import gnupg
+import requests
 
 from bs4 import BeautifulSoup
-from email.message import EmailMessage
 
 ###############################################################################
 ###############################################################################
@@ -44,8 +51,12 @@ def configure(fresh=False):
 
     home_dir = os.path.expanduser('~')
     gpg_home = os.path.join(home_dir, '.gnupg')
-    gpg = gnupg.GPG(gnupghome=gpg_home, use_agent=True)
+    gpg_agent = os.path.join(gpg_home, 'S.gpg-agent')
 
+    # GPG agent information
+    os.environ['GPG_AGENT_INFO'] = f'{gpg_agent}:0:1'
+
+    gpg = gnupg.GPG(gnupghome=gpg_home, use_agent=True)
     keys = gpg.list_keys()
     if len(keys) == 0:
         print("No GPG keys found. generating ...")
@@ -161,16 +172,16 @@ def get_kendra_attendance(username, password, date):
 
     response = s.get(attendance_url + attendance_options)
     soup = BeautifulSoup(response.text, 'html.parser')
-    attendance_element = soup.find('td', {'title': str(day)})
-    attendance_time = attendance_element.text
+    attendance_element = soup.find('td', {'title': str(int(day))})
+    attendance_status = attendance_element.text
 
     s.get(logout_url)
     s.close()
 
-    if attendance_time == "-":
-        attendance_time = None
+    if attendance_status == "-":
+        attendance_status = None
 
-    return attendance_time
+    return attendance_status
 
 ###############################################################################
 
@@ -216,22 +227,26 @@ def get_pingala_attendance(username, password, date):
 
     response = s.get(attendance_url.format(date, date))
     response_dict = json.loads(response.text)
-    attendance_details = response_dict['listMyAttendanceDetails'][0]
-    attendance_time = attendance_details['intime']
-    week_off = attendance_details['status'] == 'Week Off'
+    attendance_details_list = response_dict['listMyAttendanceDetails']
 
-    if week_off:
-        attendance_time = attendance_details['status']
+    if len(attendance_details_list) == 0:
+        return None
+
+    attendance_details = attendance_details_list[0]
+    attendance_status = attendance_details['intime']
+    special = attendance_details['status'] in ['Week Off', 'Present']
+    if not attendance_status and special:
+        attendance_status = attendance_details['status']
 
     s.post(logout_url, data=logout_data)
     s.close()
 
-    return attendance_time
+    return attendance_status
 
 ###############################################################################
 
 
-def notify(smtp_user, smtp_pass, source, date):
+def sendmail(smtp_user, smtp_pass, subject='', content=''):
     '''
     Send a notification email using CSE SMTP.
     '''
@@ -242,19 +257,16 @@ def notify(smtp_user, smtp_pass, source, date):
 
     # ----------------------------------------------------------------------- #
 
-    content = ''
-    subject = 'Mark attendance on {} for {}'.format(source.title(), date)
-
     # compose mail
     msg = EmailMessage()
     msg.set_content(content)
     msg['Subject'] = subject
-    msg['From'] = 'Attendance Reminder <{}@cse.iitk.ac.in>'.format(smtp_user)
-    msg['To'] = '{}@cse.iitk.ac.in'.format(smtp_user)
+    msg['From'] = f'Attendance Reminder <{smtp_user}@cse.iitk.ac.in>'
+    msg['To'] = f'{smtp_user}@cse.iitk.ac.in'
 
     # send mail
     if smtp_pass:
-        mailer = smtplib.SMTP('{}:{}'.format(smtp_addr, smtp_port))
+        mailer = smtplib.SMTP(f'{smtp_addr}:{smtp_port}')
         mailer.starttls()
         mailer.login(smtp_user, smtp_pass)
         mailer.send_message(msg)
@@ -296,15 +308,23 @@ def main():
             password = details['password']
             fetch_attendance = details['function']
 
-            attendance_time = fetch_attendance(username, password, date)
-            if attendance_time is None:
-                attendance_time = "not marked!"
-                logging.info("Attendance not marked on {} for {}".format(title,
-                                                                         date))
-                if date == today:
-                    notify(smtp_user, smtp_pass, title, today)
+            try:
+                attendance_status = fetch_attendance(username, password, date)
+            except Exception as e:
+                logging.error(e)
+                attendance_status = None
+                subject = f'Error in fetching attendance from {title}'
+                content = traceback.print_exec()
+                sendmail(smtp_user, smtp_pass, subject, content)
 
-            attendance_msg = "{}: [{}] {}".format(title, date, attendance_time)
+            if attendance_status is None:
+                attendance_status = "not marked!"
+                logging.info(f"Attendance not marked on {title} for {date}")
+                if date == today:
+                    subject = f'Mark attendance on {title} for {today}'
+                    sendmail(smtp_user, smtp_pass, subject=subject)
+
+            attendance_msg = f"{title}: [{date}] {attendance_status}"
 
             logging.info(attendance_msg)
             print(attendance_msg)
