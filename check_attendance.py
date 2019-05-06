@@ -40,6 +40,13 @@ import requests
 from bs4 import BeautifulSoup
 
 ###############################################################################
+
+context = {
+    'login': None,
+    'attendance_list': None,
+    'details': None
+}
+
 ###############################################################################
 
 
@@ -148,6 +155,8 @@ def get_kendra_attendance(username, password, date):
     '''
     Fetch attendance from Kendra
     '''
+    global context
+
     server = 'https://kendra.cse.iitk.ac.in/kendra/pages/'
 
     login_url = server + 'AuthenticateUser.php'
@@ -169,14 +178,22 @@ def get_kendra_attendance(username, password, date):
     check_response = s.get(profile_url)
     if username in check_response.text:
         logging.info("Kendra login successful.")
+        context['login'] = True
     else:
         logging.warning("Kendra login failed.")
+        context['login'] = False
+        context['details'] = 'Attendance may or may not have been marked.'
         return None
 
     response = s.get(attendance_url + attendance_options)
     soup = BeautifulSoup(response.text, 'html.parser')
     attendance_element = soup.find('td', {'title': str(int(day))})
-    attendance_status = attendance_element.text
+    if not attendance_element:
+        context['attendance_list'] = False
+        attendance_status = None
+    else:
+        context['attendance_list'] = True
+        attendance_status = attendance_element.text
 
     s.get(logout_url)
     s.close()
@@ -193,6 +210,8 @@ def get_pingala_attendance(username, password, date):
     '''
     Fetch attendance from Pingala
     '''
+    global context
+
     server = 'https://pingala.iitk.ac.in/IITK-0/'
 
     form_url = server + 'login'
@@ -224,8 +243,11 @@ def get_pingala_attendance(username, password, date):
         soup = BeautifulSoup(check_response.text, 'html.parser')
         csrf = soup.find('input', {"name": "_csrf"})['value']
         logout_data['_csrf'] = csrf
+        context['login'] = True
     else:
         logging.warning("Pingala login failed.")
+        context['login'] = False
+        context['details'] = 'Attendance may or may not have been marked.'
         return None
 
     response = s.get(attendance_url.format(date, date))
@@ -233,7 +255,10 @@ def get_pingala_attendance(username, password, date):
     attendance_details_list = response_dict['listMyAttendanceDetails']
 
     if len(attendance_details_list) == 0:
+        context['attendance_list'] = False
         return None
+
+    context['attendance_list'] = True
 
     attendance_details = attendance_details_list[0]
     attendance_status = attendance_details['intime']
@@ -282,6 +307,8 @@ def sendmail(smtp_user, smtp_pass, subject='', content=''):
 
 
 def main():
+    global context
+
     today = datetime.datetime.now().strftime("%d-%m-%Y")
 
     ###########################################################################
@@ -294,6 +321,10 @@ def main():
     args = vars(p.parse_args())
     date = args['d']
     fresh = args['f']
+
+    date_object = datetime.date(*map(int, reversed(date.split('-'))))
+    day_of_week = date_object.strftime('%A')
+    is_weekday = day_of_week not in ['Saturday', 'Sunday']
 
     ###########################################################################
 
@@ -321,12 +352,23 @@ def main():
                 content = traceback.print_exec()
                 sendmail(smtp_user, smtp_pass, subject, content)
 
-            if attendance_status is None:
+            # send reminder mail if applicable (not marked and not weekend)
+            if attendance_status is None and is_weekday:
                 attendance_status = "not marked!"
                 logging.info(f"Attendance not marked on {title} for {date}")
+
+                # reminder only for today
                 if date == today:
                     subject = f'Mark attendance on {title} for {today}'
-                    sendmail(smtp_user, smtp_pass, subject)
+                    content = ''
+
+                    # login failed, so uncertain
+                    if not context['login']:
+                        subject = f'Login to {title} failed.'
+                    if context['details']:
+                        content = context['details']
+
+                    sendmail(smtp_user, smtp_pass, subject, content)
 
             attendance_msg = f"{title}: [{date}] {attendance_status}"
 
