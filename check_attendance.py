@@ -313,7 +313,7 @@ def main():
 
     ###########################################################################
 
-    desc = "Get Pingala Attendance Time"
+    desc = "Check and Reminds if attendance is not marked (Kendra, Pingala)"
 
     p = argparse.ArgumentParser(description=desc)
     p.add_argument("-d", help="date dd-mm-yyyy", default=today)
