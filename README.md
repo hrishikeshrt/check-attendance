@@ -5,14 +5,16 @@ Checks both on **Kendra** and **Pingala**
 ## Instructions
 
 ```
-usage: check_attendance.py [-h] [-d D] [-f]
+usage: check_attendance.py [-h] [-d DATE] [-f] [--unsafe] [-v]
 
 Check and Remind if attendance is not marked (Kendra, Pingala)
 
 optional arguments:
-  -h, --help  show this help message and exit
-  -d D        date dd-mm-yyyy
-  -f          force re-configure
+  -h, --help            show this help message and exit
+  -d DATE, --date DATE  date dd-mm-yyyy
+  -f, --force           force re-configure
+  --unsafe              Store credentials in plaintext
+  -v, --verbose         Verbose output and logging
 ```
 
 ### Basic Usage
