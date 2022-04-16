@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-@author: Hrishikesh Terdalkar
-
 Attendance Checker and Reminder for IITK CSE
+--------------------------------------------
+
 Checks both on Kendra and Pingala
 
-You can add the command to cronjob by running the command `crontab -e'
-and adding the  following line at the end. (for checking at 5pm, 8pm, 11pm)
+The command can be added as a cron job. Run the command `crontab -e` and add
+the following line at the end, for running the script at 5pm, 8pm and 11pm.
 
-    0 17,20,23 * * * python3 <path_to_the_script>
+```
+    0 17,20,23 * * * <path_to_python3> <path_to_the_script>
+```
+Requirements
+------------
+* requests
+* python-gnupg
+* beautifulsoup4
 
-Requirements:
-    python 3.6+
-
-    requests
-    python-gnupg
-    beautifulsoup4
-
-    `pip install requests`
-    `pip install python-gnupg`
-    `pip install beautifulsoup4`
+@author: Hrishikesh Terdalkar
 """
 
 import os
@@ -34,14 +32,29 @@ import traceback
 
 from email.message import EmailMessage
 
-import gnupg
 import requests
-
 from bs4 import BeautifulSoup
+
+try:
+    import gnupg
+    GNUPG_FOUND = True
+except ImportError:
+    GNUPG_FOUND = False
 
 ###############################################################################
 
-context = {
+LOGGER = logging.getLogger(__name__)
+FORMATTER = logging.Formatter(
+    fmt='[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+if not GNUPG_FOUND:
+    LOGGER.warning("Could not find GnuPG, using plaintext storage.")
+
+###############################################################################
+
+CONTEXT = {
     'login': None,
     'attendance_list': None,
     'details': None
@@ -50,57 +63,89 @@ context = {
 ###############################################################################
 
 
-def configure(fresh=False):
-    '''
-    Get or Set Configuration
-    '''
-    # ----------------------------------------------------------------------- #
+def setup_gnupg():
+    """Setup GnuPG Encryption"""
 
     home_dir = os.path.expanduser('~')
     gpg_home = os.path.join(home_dir, '.gnupg')
     gpg_agent = os.path.join(gpg_home, 'S.gpg-agent')
 
+    # ----------------------------------------------------------------------- #
+
     # GPG agent information
     os.environ['GPG_AGENT_INFO'] = f'{gpg_agent}:0:1'
 
-    gpg = gnupg.GPG(gnupghome=gpg_home, use_agent=True)
-    keys = gpg.list_keys()
-    if len(keys) == 0:
-        print("No GPG keys found. generating ...")
-        user_email = input("Email for GPG Key: ")
-        passphrase = getpass.getpass("Passphrase for GPG Key: ")
-        key_input = gpg.gen_key_input(user_email, passphrase)
-        print("We need to generate a lot of random bytes. It is a good idea "
-              "to perform some other action (type on the keyboard, move the "
-              "mouse, utilize the disks) during the prime generation; this "
-              "gives the random number generator a better chance to gain "
-              "enough entropy.")
-        gpg.gen_key(key_input)
+    try:
+        gpg = gnupg.GPG(gnupghome=gpg_home, use_agent=True)
         keys = gpg.list_keys()
-
-    key = keys[0]['keyid']
+        if len(keys) == 0:
+            print("No GPG keys found. generating ...")
+            user_email = input("Email for GPG Key: ")
+            passphrase = getpass.getpass("Passphrase for GPG Key: ")
+            key_input = gpg.gen_key_input(user_email, passphrase)
+            print(
+                "We need to generate a lot of random bytes. It is a good idea "
+                "to perform some other action (type on the keyboard, move the "
+                "mouse, utilize the disks) during the prime generation; this "
+                "gives the random number generator a better chance to gain "
+                "enough entropy."
+            )
+            gpg.gen_key(key_input)
+    except Exception:
+        return None
 
     # ----------------------------------------------------------------------- #
 
+    return gpg
+
+
+def configure(fresh=False, secure=GNUPG_FOUND):
+    '''Get or Set Configuration'''
+
+    decrypt = lambda x: x
+    encrypt = lambda x: x
+
+    if secure:
+        gpg = setup_gnupg()
+        if gpg is None:
+            LOGGER.warning("Could not setup GnuPG, using plaintext storage.")
+        else:
+            keys = gpg.list_keys()
+            key = keys[0]['keyid']
+            decrypt = lambda x: str(gpg.decrypt(x))
+            encrypt = lambda x: str(gpg.encrypt(x, key))
+
+    # ----------------------------------------------------------------------- #
+
+    home_dir = os.path.expanduser('~')
     attendance_dir = os.path.join(home_dir, '.attendance')
-    config_file = os.path.join(attendance_dir, 'config')
+    secure_config_file = os.path.join(attendance_dir, 'config.secure')
+    unsafe_config_file = os.path.join(attendance_dir, 'config.unsafe')
+
+    config_file = secure_config_file if secure else unsafe_config_file
     log_file = os.path.join(attendance_dir, 'log')
 
-    logging.basicConfig(filename=log_file,
-                        format='[%(asctime)s] %(levelname)s: %(message)s',
-                        datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO)
+    # ----------------------------------------------------------------------- #
+
+    os.makedirs(attendance_dir, exist_ok=True)
+
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(FORMATTER)
+    LOGGER.addHandler(file_handler)
 
     # ----------------------------------------------------------------------- #
 
-    if not os.path.isdir(attendance_dir):
-        os.mkdir(attendance_dir)
-
+    config = {}
     if os.path.isfile(config_file) and not fresh:
-        logging.info("Reading from config file ...")
-        with open(config_file, 'r') as f:
-            config = json.loads(str(gpg.decrypt(f.read())))
-    else:
-        logging.info("Initiating fresh config ...")
+        LOGGER.info("Reading from config file ...")
+        try:
+            with open(config_file, 'r') as f:
+                config = json.loads(decrypt(f.read()))
+        except Exception:
+            LOGGER.error("Couldn't read configuration file.")
+
+    if not config:
+        LOGGER.info("Initiating fresh config ...")
 
         config = {'smtp': {}, 'kendra': {}, 'pingala': {}}
 
@@ -140,7 +185,7 @@ def configure(fresh=False):
             # --------------------------------------------------------------- #
 
         with open(config_file, 'w') as f:
-            f.write(str(gpg.encrypt(json.dumps(config), key)))
+            f.write(encrypt(json.dumps(config)))
 
     config['pingala']['function'] = get_pingala_attendance
     config['kendra']['function'] = get_kendra_attendance
@@ -155,7 +200,7 @@ def get_kendra_attendance(username, password, date):
     '''
     Fetch attendance from Kendra
     '''
-    global context
+    global CONTEXT
 
     server = 'https://kendra.cse.iitk.ac.in/kendra/pages/'
 
@@ -177,22 +222,22 @@ def get_kendra_attendance(username, password, date):
     s.post(login_url, data=data)
     check_response = s.get(profile_url)
     if username in check_response.text:
-        logging.info("Kendra login successful.")
-        context['login'] = True
+        LOGGER.info("Kendra login successful.")
+        CONTEXT['login'] = True
     else:
-        logging.warning("Kendra login failed.")
-        context['login'] = False
-        context['details'] = 'Attendance may or may not have been marked.'
+        LOGGER.warning("Kendra login failed.")
+        CONTEXT['login'] = False
+        CONTEXT['details'] = 'Attendance may or may not have been marked.'
         return None
 
     response = s.get(attendance_url + attendance_options)
     soup = BeautifulSoup(response.text, 'html.parser')
     attendance_element = soup.find('td', {'title': str(int(day))})
     if not attendance_element:
-        context['attendance_list'] = False
+        CONTEXT['attendance_list'] = False
         attendance_status = None
     else:
-        context['attendance_list'] = True
+        CONTEXT['attendance_list'] = True
         attendance_status = attendance_element.text
 
     s.get(logout_url)
@@ -210,7 +255,7 @@ def get_pingala_attendance(username, password, date):
     '''
     Fetch attendance from Pingala
     '''
-    global context
+    global CONTEXT
 
     server = 'https://pingala.iitk.ac.in/IITK-0/'
 
@@ -238,16 +283,16 @@ def get_pingala_attendance(username, password, date):
     s.post(login_url, data=login_data)
     check_response = s.get(logincheck_url)
     if username in check_response.text:
-        logging.info("Pingala login successful.")
+        LOGGER.info("Pingala login successful.")
 
         soup = BeautifulSoup(check_response.text, 'html.parser')
         csrf = soup.find('input', {"name": "_csrf"})['value']
         logout_data['_csrf'] = csrf
-        context['login'] = True
+        CONTEXT['login'] = True
     else:
-        logging.warning("Pingala login failed.")
-        context['login'] = False
-        context['details'] = 'Attendance may or may not have been marked.'
+        LOGGER.warning("Pingala login failed.")
+        CONTEXT['login'] = False
+        CONTEXT['details'] = 'Attendance may or may not have been marked.'
         return None
 
     response = s.get(attendance_url.format(date, date))
@@ -255,10 +300,10 @@ def get_pingala_attendance(username, password, date):
     attendance_details_list = response_dict['listMyAttendanceDetails']
 
     if len(attendance_details_list) == 0:
-        context['attendance_list'] = False
+        CONTEXT['attendance_list'] = False
         return None
 
-    context['attendance_list'] = True
+    CONTEXT['attendance_list'] = True
 
     attendance_details = attendance_details_list[0]
     attendance_status = attendance_details['intime']
@@ -299,36 +344,44 @@ def sendmail(smtp_user, smtp_pass, subject='', content=''):
         mailer.login(smtp_user, smtp_pass)
         mailer.send_message(msg)
         mailer.quit()
-        logging.info("Reminder e-mail sent.")
+        LOGGER.info("Reminder e-mail sent.")
     else:
-        logging.warnign("Error: no credentials. e-mail was not sent.")
+        LOGGER.warnign("Error: no credentials. e-mail was not sent.")
 
 ###############################################################################
 
 
 def main():
-    global context
-
     today = datetime.datetime.now().strftime("%d-%m-%Y")
 
     ###########################################################################
 
-    desc = "Check and Reminds if attendance is not marked (Kendra, Pingala)"
+    desc = "Check and Remind if attendance is not marked (Kendra, Pingala)"
 
     p = argparse.ArgumentParser(description=desc)
-    p.add_argument("-d", help="date dd-mm-yyyy", default=today)
-    p.add_argument("-f", help="force re-configure", action='store_true')
+    p.add_argument("-d", "--date", help="date dd-mm-yyyy", default=today)
+    p.add_argument("-f", "--force", help="force re-configure", action='store_true')
+    p.add_argument("--unsafe", help="Store credentials in plaintext", action="store_true")
+    p.add_argument("-v", "--verbose", help="Verbose output and logging", action="store_true")
+
     args = vars(p.parse_args())
-    date = args['d']
-    fresh = args['f']
+
+    date = args['date']
+    fresh = args['force']
+    secure = not args['unsafe']
+    verbose = args['verbose']
 
     date_object = datetime.date(*map(int, reversed(date.split('-'))))
     day_of_week = date_object.strftime('%A')
     is_weekday = day_of_week not in ['Saturday', 'Sunday']
 
+    if verbose:
+        LOGGER.setLevel(logging.INFO)
+        LOGGER.addHandler(logging.StreamHandler())
+
     ###########################################################################
 
-    config = configure(fresh=fresh)
+    config = configure(fresh=fresh, secure=secure)
 
     smtp_user = config['smtp']['username']
     smtp_pass = config['smtp']['password']
@@ -346,7 +399,7 @@ def main():
             try:
                 attendance_status = fetch_attendance(username, password, date)
             except Exception as e:
-                logging.error(e)
+                LOGGER.error(e)
                 attendance_status = None
                 subject = f'Error in fetching attendance from {title}'
                 content = traceback.print_exec()
@@ -355,7 +408,7 @@ def main():
             # send reminder mail if applicable (not marked and not weekend)
             if attendance_status is None and is_weekday:
                 attendance_status = "not marked!"
-                logging.info(f"Attendance not marked on {title} for {date}")
+                LOGGER.info(f"Attendance not marked on {title} for {date}")
 
                 # reminder only for today
                 if date == today:
@@ -363,16 +416,16 @@ def main():
                     content = ''
 
                     # login failed, so uncertain
-                    if not context['login']:
+                    if not CONTEXT['login']:
                         subject = f'Login to {title} failed.'
-                    if context['details']:
-                        content = context['details']
+                    if CONTEXT['details']:
+                        content = CONTEXT['details']
 
                     sendmail(smtp_user, smtp_pass, subject, content)
 
             attendance_msg = f"{title}: [{date}] {attendance_status}"
 
-            logging.info(attendance_msg)
+            LOGGER.info(attendance_msg)
             print(attendance_msg)
 
     ###########################################################################
