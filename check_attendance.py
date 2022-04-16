@@ -43,11 +43,33 @@ except ImportError:
     GNUPG_FOUND = False
 
 ###############################################################################
+# Preferences
+
+HOME_DIR = os.path.expanduser("~")
+CONFIG_DIR = os.path.join(HOME_DIR, ".attendance")
+
+SECURE_CONFIG_FILE = os.path.join(CONFIG_DIR, "config.secure")
+UNSAFE_CONFIG_FILE = os.path.join(CONFIG_DIR, "config.unsafe")
+
+LOG_FILE = os.path.join(CONFIG_DIR, "log")
+
+# ----------------------------------------------------------------------- #
+
+os.makedirs(CONFIG_DIR, exist_ok=True)
+
+###############################################################################
+# Logger
 
 LOGGER = logging.getLogger(__name__)
 FORMATTER = logging.Formatter(
     fmt="[%(asctime)s] %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
 )
+
+FILE_HANDLER = logging.FileHandler(LOG_FILE)
+FILE_HANDLER.setFormatter(FORMATTER)
+LOGGER.addHandler(FILE_HANDLER)
+
+###############################################################################
 
 if not GNUPG_FOUND:
     LOGGER.warning("Could not find GnuPG, using plaintext storage.")
@@ -61,9 +83,7 @@ CONTEXT = {"login": None, "attendance_list": None, "details": None}
 
 def setup_gnupg():
     """Setup GnuPG Encryption"""
-
-    home_dir = os.path.expanduser("~")
-    gpg_home = os.path.join(home_dir, ".gnupg")
+    gpg_home = os.path.join(HOME_DIR, ".gnupg")
     gpg_agent = os.path.join(gpg_home, "S.gpg-agent")
 
     # ----------------------------------------------------------------------- #
@@ -113,24 +133,7 @@ def configure(fresh=False, secure=GNUPG_FOUND):
 
     # ----------------------------------------------------------------------- #
 
-    home_dir = os.path.expanduser("~")
-    attendance_dir = os.path.join(home_dir, ".attendance")
-    secure_config_file = os.path.join(attendance_dir, "config.secure")
-    unsafe_config_file = os.path.join(attendance_dir, "config.unsafe")
-
-    config_file = secure_config_file if secure else unsafe_config_file
-    log_file = os.path.join(attendance_dir, "log")
-
-    # ----------------------------------------------------------------------- #
-
-    os.makedirs(attendance_dir, exist_ok=True)
-
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(FORMATTER)
-    LOGGER.addHandler(file_handler)
-
-    # ----------------------------------------------------------------------- #
-
+    config_file = SECURE_CONFIG_FILE if secure else UNSAFE_CONFIG_FILE
     config = {}
     if os.path.isfile(config_file) and not fresh:
         LOGGER.info("Reading from config file ...")
@@ -345,7 +348,7 @@ def sendmail(smtp_user, smtp_pass, subject="", content=""):
         mailer.quit()
         LOGGER.info("Reminder e-mail sent.")
     else:
-        LOGGER.warnign("Error: no credentials. e-mail was not sent.")
+        LOGGER.warning("Error: no credentials. e-mail was not sent.")
 
 
 ###############################################################################
