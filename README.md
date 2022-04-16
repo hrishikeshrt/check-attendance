@@ -4,6 +4,15 @@ Checks both on **Kendra** and **Pingala**
 
 ## Instructions
 
+### Basic Usage
+
+```python3 check_attendance.py```
+
+Checks if the attendance was marked on the day the script is run, and if it
+wasn't and the day isn't a weekend, a reminder is sent.
+
+### Detailed Usage
+
 ```
 usage: check_attendance.py [-h] [-d DATE] [-f] [--unsafe] [-v]
 
@@ -17,13 +26,6 @@ optional arguments:
   -v, --verbose         Verbose output and logging
 ```
 
-### Basic Usage
-
-```python3 check_attendance.py```
-
-Checks if the attendance was marked on the day the script is run, and if it
-wasn't and the day isn't a weekend, a reminder is sent.
-
 ### Automated Check
 
 The command can be added as a cron job. Run the command `crontab -e` and add
@@ -33,7 +35,7 @@ the following line at the end, for running the script at 5pm, 8pm and 11pm.
     0 17,20,23 * * * <path_to_python3> <path_to_the_script>
 ```
 
-## Requirements:
+## Requirements
 
 * `requests>=2.27.1`
 * `beautifulsoup4>=4.11.1`
