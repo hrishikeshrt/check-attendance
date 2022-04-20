@@ -200,7 +200,6 @@ def get_kendra_attendance(username, password, date):
     """
     Fetch attendance from Kendra
     """
-    global CONTEXT
 
     server = "https://kendra.cse.iitk.ac.in/kendra/pages/"
 
@@ -218,14 +217,14 @@ def get_kendra_attendance(username, password, date):
         "TR_Password": password,
     }
 
-    s = requests.session()
+    s = requests.Session()
     s.post(login_url, data=data)
     check_response = s.get(profile_url)
     if username in check_response.text:
         LOGGER.info("Kendra login successful.")
         CONTEXT["login"] = True
     else:
-        LOGGER.warning("Kendra login failed.")
+        LOGGER.error("Kendra login failed.")
         CONTEXT["login"] = False
         CONTEXT["details"] = "Attendance may or may not have been marked."
         return None
@@ -256,7 +255,6 @@ def get_pingala_attendance(username, password, date):
     """
     Fetch attendance from Pingala
     """
-    global CONTEXT
 
     server = "https://pingala.iitk.ac.in/IITK-0/"
 
@@ -291,7 +289,7 @@ def get_pingala_attendance(username, password, date):
         logout_data["_csrf"] = csrf
         CONTEXT["login"] = True
     else:
-        LOGGER.warning("Pingala login failed.")
+        LOGGER.error("Pingala login failed.")
         CONTEXT["login"] = False
         CONTEXT["details"] = "Attendance may or may not have been marked."
         return None
@@ -348,7 +346,7 @@ def sendmail(smtp_user, smtp_pass, subject="", content=""):
         mailer.quit()
         LOGGER.info("Reminder e-mail sent.")
     else:
-        LOGGER.warning("Error: no credentials. e-mail was not sent.")
+        LOGGER.error("No credentials found. E-mail was not sent.")
 
 
 ###############################################################################
