@@ -589,10 +589,11 @@ def main():
 
     ###########################################################################
 
-    for name, details in config.items():
+    for name in ["kendra", "pingala"]:
         title = name.title()
+        details = config.get(name, {})
 
-        if details["check"]:
+        if details and details.get("check"):
             username = details["username"]
             password = details["password"]
             fetch_attendance = details["function"]
