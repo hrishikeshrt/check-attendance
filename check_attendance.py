@@ -114,6 +114,68 @@ def setup_gnupg():
 
     return gpg
 
+###############################################################################
+
+
+class Configuration:
+
+    def __init__(self, config=None, secure=GNUPG_FOUND):
+        self.gpg = None
+        self._config = config or {}
+
+        if secure:
+            self.gpg = setup_gnupg()
+
+        if self.gpg is None:
+            LOGGER.warning("Could not setup GnuPG.")
+            self.secure = False
+            self.gnupg_key = None
+            self.path = SECURE_CONFIG_FILE
+        else:
+            keys = self.gpg.list_keys()
+            self.gnupg_key = keys[0]["keyid"]
+            self.secure = True
+            self.path = UNSAFE_CONFIG_FILE
+
+    # ----------------------------------------------------------------------- #
+
+    def get(self, k):
+        return self._config.get(k)
+
+    def set(self, k, v):
+        self._config[k] = v
+
+    # ----------------------------------------------------------------------- #
+
+    def read(self):
+        self._config = {}
+        if os.path.isfile(self.path):
+            with open(self.path, mode="r", encoding="utf-8") as f:
+                self._config = json.load(self.decrypt(f.read()))
+
+        return self._config
+
+    def save(self):
+        with open(self.path, mode="w", encoding="utf-8") as f:
+            f.write(self.encrypt(json.dumps(self._config)))
+
+    # ----------------------------------------------------------------------- #
+
+    def encrypt(self, s):
+        if self.secure:
+            return str(self.gpg.encrypt(s, self.gnupg_key))
+        return s
+
+    def decrypt(self, s):
+        if self.secure:
+            return str(self.gpg.decrypt(s))
+        return s
+
+    # ----------------------------------------------------------------------- #
+
+
+###############################################################################
+
 
 def configure(fresh=False, secure=GNUPG_FOUND):
     """Get or Set Configuration"""
