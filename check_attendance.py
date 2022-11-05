@@ -114,6 +114,68 @@ def setup_gnupg():
 
     return gpg
 
+###############################################################################
+
+
+class Configuration:
+
+    def __init__(self, config=None, secure=GNUPG_FOUND):
+        self.gpg = None
+        self._config = config or {}
+
+        if secure:
+            self.gpg = setup_gnupg()
+
+        if self.gpg is None:
+            LOGGER.warning("Could not setup GnuPG.")
+            self.secure = False
+            self.gnupg_key = None
+            self.path = SECURE_CONFIG_FILE
+        else:
+            keys = self.gpg.list_keys()
+            self.gnupg_key = keys[0]["keyid"]
+            self.secure = True
+            self.path = UNSAFE_CONFIG_FILE
+
+    # ----------------------------------------------------------------------- #
+
+    def get(self, k):
+        return self._config.get(k)
+
+    def set(self, k, v):
+        self._config[k] = v
+
+    # ----------------------------------------------------------------------- #
+
+    def read(self):
+        self._config = {}
+        if os.path.isfile(self.path):
+            with open(self.path, mode="r", encoding="utf-8") as f:
+                self._config = json.load(self.decrypt(f.read()))
+
+        return self._config
+
+    def save(self):
+        with open(self.path, mode="w", encoding="utf-8") as f:
+            f.write(self.encrypt(json.dumps(self._config)))
+
+    # ----------------------------------------------------------------------- #
+
+    def encrypt(self, s):
+        if self.secure:
+            return str(self.gpg.encrypt(s, self.gnupg_key))
+        return s
+
+    def decrypt(self, s):
+        if self.secure:
+            return str(self.gpg.decrypt(s))
+        return s
+
+    # ----------------------------------------------------------------------- #
+
+
+###############################################################################
+
 
 def configure(fresh=False, secure=GNUPG_FOUND):
     """Get or Set Configuration"""
@@ -194,13 +256,203 @@ def configure(fresh=False, secure=GNUPG_FOUND):
 
 ###############################################################################
 ###############################################################################
+# Session Classes
+# NOTE: Currently not used, but worth transitioning to, soon.
+
+
+class KendraSession:
+    """Kendra Session"""
+
+    SERVER = "https://kendra.cse.iitk.ac.in/kendra/pages/"
+    SITEMAP = {
+        "login": "AuthenticateUser.php",
+        "logout": "Logout.php",
+        "profile": "MyProfile.php",
+        "attendance": "StudentAttendanceReport1.php"
+    }
+
+    def __init__(self, username, password):
+        self.session = requests.Session()
+        self.username = username
+        self.password = password
+        self.login()
+
+    def url_for(self, option):
+        if option in self.SITEMAP:
+            return f"{self.SERVER}{self.SITEMAP[option]}"
+
+    def login(self):
+        data = {
+            "TR_Username": self.username,
+            "TR_Password": self.password,
+        }
+
+        self.session.post(self.url_for("login"), data=data)
+        check_response = self.session.get(self.url_for("profile"))
+        self.logged_in = self.username in check_response.text
+        if self.logged_in:
+            LOGGER.info("Kendra login successful.")
+        else:
+            LOGGER.error("Kendra login failed.")
+        # CONTEXT["login"] = self.logged_in
+        return self.logged_in
+
+    def logout(self):
+        self.session.get(self.url_for("logout"))
+
+    def get_month_attendance(self, month, year):
+        """Fetch attendance for the specified month"""
+        if not self.logged_in:
+            self.login()
+
+        if not self.logged_in:
+            CONTEXT["details"] = "Attendance may or may not have been marked."
+            return None
+
+        attendance_options = f"Select=&val=i&FMonth={month}&FYear={year}"
+        attendance_url = f"{self.url_for('attendance')}?{attendance_options}"
+
+        response = self.session.get(attendance_url)
+        soup = BeautifulSoup(response.text, "html.parser")
+        tbody = soup.find("tbody")
+        month_attendance = {}
+        for td in tbody.find_all("td"):
+            if "title" in td.attrs:
+                attendance_status = td.text
+                if attendance_status == "-":
+                    attendance_status = None
+                month_attendance[td["title"]] = attendance_status
+
+        return month_attendance
+
+    def get_attendance(self, date):
+        """Fetch attendance for the specified date"""
+        day, month, year = date.split("-")
+        month_attendance = self.get_month_attendance(month, year)
+        if not month_attendance:
+            CONTEXT["attendance_list"] = False
+            attendance_status = None
+        else:
+            CONTEXT["attendance_list"] = True
+            attendance_status = month_attendance.get(day)
+        return attendance_status
+
+
+class PingalaSession:
+    """Pingala Session"""
+
+    SERVER = "https://pingala.iitk.ac.in/IITK-0/"
+    SITEMAP = {
+        "login_form": "login",
+        "login": "j_spring_security_check",
+        "logout": "j_spring_security_logout",
+        "login_check": "logincheck",
+        "attendance": "listMyAttendanceDetails"
+    }
+
+    def __init__(self, username, password):
+        self.session = requests.Session()
+        self.username = username
+        self.password = password
+        self._csrf = None
+        self.login()
+
+    def url_for(self, option):
+        if option in self.SITEMAP:
+            return f"{self.SERVER}{self.SITEMAP[option]}"
+
+    def login(self):
+        login_data = {
+            "javascriptAbility": "Disable",
+            "username": self.username,
+            "password": self.password,
+            "_csrf": None,
+        }
+        r = self.session.get(self.url_for("login_form"))
+        soup = BeautifulSoup(r.text, "html.parser")
+        self._csrf = soup.find("input", {"name": "_csrf"})["value"]
+        login_data["_csrf"] = self._csrf
+
+        self.session.post(self.url_for("login"), data=login_data)
+        check_response = self.session.get(self.url_for("login_check"))
+        self.logged_in = self.username in check_response.text
+        if self.logged_in:
+            soup = BeautifulSoup(check_response.text, "html.parser")
+            self._csrf = soup.find("input", {"name": "_csrf"})["value"]
+            LOGGER.info("Pingala login successful.")
+        else:
+            LOGGER.error("Pingala login failed.")
+        # CONTEXT["login"] = self.logged_in
+        return self.logged_in
+
+    def logout(self):
+        logout_data = {
+            "_csrf": self._csrf
+        }
+        self.session.post(self.url_for("logout"), data=logout_data)
+
+    def get_period_attendance(self, from_date, to_date):
+        """Fetch attendance for the specified period"""
+        if not self.logged_in:
+            self.login()
+
+        if not self.logged_in:
+            CONTEXT["details"] = "Attendance may or may not have been marked."
+            return None
+
+        attendance_options = f"from_date={from_date}&to_date={to_date}"
+        attendance_url = f"{self.url_for('attendance')}?{attendance_options}"
+
+        response = self.session.get(attendance_url)
+        response_dict = json.loads(response.text)
+        attendance_details_list = response_dict["listMyAttendanceDetails"]
+
+        CONTEXT["attendance_list"] = len(attendance_details_list) > 0
+        if not CONTEXT["attendance_list"]:
+            return None
+
+        period_attendance = {}
+        attendance_details_list = sorted(
+            attendance_details_list,
+            key=lambda x: x["date"]
+        )
+        for day_details in attendance_details_list:
+            year, month, day = day_details["date"].split("-")
+            day_date = "-".join([day, month, year])
+            period_attendance[day_date] = {
+                "status": day_details["status"],
+                "intime": day_details["intime"],
+                "device_in": day_details["device_in"]
+            }
+        return period_attendance
+
+    def get_attendance(self, date):
+        """Fetch attendance for the specified date"""
+        day, month, year = date.split("-")
+
+        month_attendance = self.get_period_attendance(
+            f"01-{month}-{year}",
+            f"01-{int(month) % 12 + 1}-{year + (month == '12')}"
+        )
+        if month_attendance:
+            attendance_details = month_attendance.get(date)
+
+        attendance_status = attendance_details["intime"]
+        special = attendance_details["status"] in ["Week Off", "Present"]
+        if not attendance_status and special:
+            attendance_status = attendance_details["status"]
+
+        return attendance_details, attendance_status
+
+
+###############################################################################
+###############################################################################
 
 
 def get_kendra_attendance(username, password, date):
     """
     Fetch attendance from Kendra
     """
-    global CONTEXT
 
     server = "https://kendra.cse.iitk.ac.in/kendra/pages/"
 
@@ -218,14 +470,14 @@ def get_kendra_attendance(username, password, date):
         "TR_Password": password,
     }
 
-    s = requests.session()
+    s = requests.Session()
     s.post(login_url, data=data)
     check_response = s.get(profile_url)
     if username in check_response.text:
         LOGGER.info("Kendra login successful.")
         CONTEXT["login"] = True
     else:
-        LOGGER.warning("Kendra login failed.")
+        LOGGER.error("Kendra login failed.")
         CONTEXT["login"] = False
         CONTEXT["details"] = "Attendance may or may not have been marked."
         return None
@@ -256,7 +508,6 @@ def get_pingala_attendance(username, password, date):
     """
     Fetch attendance from Pingala
     """
-    global CONTEXT
 
     server = "https://pingala.iitk.ac.in/IITK-0/"
 
@@ -291,7 +542,7 @@ def get_pingala_attendance(username, password, date):
         logout_data["_csrf"] = csrf
         CONTEXT["login"] = True
     else:
-        LOGGER.warning("Pingala login failed.")
+        LOGGER.error("Pingala login failed.")
         CONTEXT["login"] = False
         CONTEXT["details"] = "Attendance may or may not have been marked."
         return None
@@ -348,7 +599,7 @@ def sendmail(smtp_user, smtp_pass, subject="", content=""):
         mailer.quit()
         LOGGER.info("Reminder e-mail sent.")
     else:
-        LOGGER.warning("Error: no credentials. e-mail was not sent.")
+        LOGGER.error("No credentials found. E-mail was not sent.")
 
 
 ###############################################################################
@@ -400,10 +651,11 @@ def main():
 
     ###########################################################################
 
-    for name, details in config.items():
+    for name in ["kendra", "pingala"]:
         title = name.title()
+        details = config.get(name, {})
 
-        if details["check"]:
+        if details and details.get("check"):
             username = details["username"]
             password = details["password"]
             fetch_attendance = details["function"]
